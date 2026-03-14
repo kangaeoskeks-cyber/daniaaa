@@ -32,306 +32,212 @@ import {
 import ClickSpark from "@/components/ui/ClickSpark";
 
 /* ══════════════════════════════════════════════════════════════════════════
-   HERO BACKGROUND — Living Financial Neural Network
-   Layers (back → front):
-   1. Morphing wave bands (CSS + D3 paths)
-   2. Force-graph constellation of financial nodes + glowing edges
-   3. Animated "money packets" traveling along edges
-   4. Mouse-reactive gravitational warp field
-   5. Scanline vignette overlay
+   HERO BACKGROUND — Isometric 3-D Bar Chart Landscape
+   A grid of bars rendered in isometric projection rises and falls like a
+   breathing financial terrain. Mouse proximity heats up nearby columns.
+   D3 generates the height field via overlapping sine waves.
    ══════════════════════════════════════════════════════════════════════════ */
 const HeroBackground = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const svgRef   = useRef<SVGSVGElement>(null);
-  const mouseRef = useRef({ x: 0, y: 0 });
-  const rafRef   = useRef<number>(0);
+  const mouseRef  = useRef({ x: -9999, y: -9999 });
+  const rafRef    = useRef<number>(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const svgEl  = svgRef.current;
-    if (!canvas || !svgEl) return;
+    if (!canvas) return;
 
-    const W = window.innerWidth;
-    const H = window.innerHeight;
+    let W = window.innerWidth;
+    let H = window.innerHeight;
     canvas.width  = W;
     canvas.height = H;
     const ctx = canvas.getContext("2d")!;
 
-    // ── SVG layer (waves) ─────────────────────────────────────────────────
-    const svg = d3.select(svgEl)
-      .attr("width", W).attr("height", H)
-      .attr("viewBox", `0 0 ${W} ${H}`);
-    svg.selectAll("*").remove();
+    // ── Grid config ───────────────────────────────────────────────────────
+    const COLS = 28;
+    const ROWS = 18;
 
-    const defs = svg.append("defs");
+    // Isometric projection helpers
+    // Grid origin is centred-top of canvas, tilted so it fills the frame
+    const ISO_SCALE = Math.min(W, H) / 14;
+    const originX   = W * 0.5;
+    const originY   = H * 0.18;
 
-    // Glow filter
-    const glowFilter = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
-    glowFilter.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "blur");
-    const feMerge = glowFilter.append("feMerge");
-    feMerge.append("feMergeNode").attr("in", "blur");
-    feMerge.append("feMergeNode").attr("in", "SourceGraphic");
-
-    // Subtle glow filter for waves
-    const waveGlow = defs.append("filter").attr("id", "wave-glow");
-    waveGlow.append("feGaussianBlur").attr("stdDeviation", "18").attr("result", "blur");
-    const wm = waveGlow.append("feMerge");
-    wm.append("feMergeNode").attr("in", "blur");
-    wm.append("feMergeNode").attr("in", "SourceGraphic");
-
-    // ── Morphing wave bands ───────────────────────────────────────────────
-    const WAVE_COUNT = 5;
-    const wavePaths: d3.Selection<SVGPathElement, unknown, null, undefined>[] = [];
-    const wavePhases = Array.from({ length: WAVE_COUNT }, (_, i) => i * (Math.PI * 2) / WAVE_COUNT);
-    const waveColors = [
-      "rgba(239,68,68,0.06)",
-      "rgba(220,38,38,0.05)",
-      "rgba(249,115,22,0.045)",
-      "rgba(239,68,68,0.04)",
-      "rgba(185,28,28,0.035)",
-    ];
-    const waveAmps   = [80, 60, 70, 50, 90];
-    const waveSpeeds = [0.00035, 0.00028, 0.00042, 0.00025, 0.00038];
-    const waveYBase  = [H * 0.30, H * 0.45, H * 0.55, H * 0.65, H * 0.75];
-
-    for (let i = 0; i < WAVE_COUNT; i++) {
-      wavePaths.push(
-        svg.append("path")
-          .attr("fill", waveColors[i])
-          .attr("filter", "url(#wave-glow)")
-      );
-    }
-
-    const buildWavePath = (t: number, i: number) => {
-      const pts: [number, number][] = [];
-      const segs = 80;
-      for (let s = 0; s <= segs; s++) {
-        const fx = (s / segs) * W;
-        const fy =
-          waveYBase[i] +
-          Math.sin(fx * 0.006 + t * waveSpeeds[i] * 1000 + wavePhases[i]) * waveAmps[i] +
-          Math.sin(fx * 0.003 + t * waveSpeeds[i] * 700  + wavePhases[i] * 1.3) * (waveAmps[i] * 0.4) +
-          Math.sin(fx * 0.001 + t * waveSpeeds[i] * 400  + wavePhases[i] * 0.7) * (waveAmps[i] * 0.6);
-        pts.push([fx, fy]);
-      }
-      const line = d3.line<[number, number]>().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom);
-      const top = line(pts) || "";
-      return top + ` L${W},${H} L0,${H} Z`;
+    // Convert grid (col, row) → screen (x, y)
+    const toScreen = (col: number, row: number, h: number = 0) => {
+      const ix = (col - COLS / 2) * ISO_SCALE;
+      const iz = (row - ROWS / 2) * ISO_SCALE;
+      const sx = originX + (ix - iz) * 0.65;
+      const sy = originY + (ix + iz) * 0.32 - h;
+      return { sx, sy };
     };
 
-    // ── Force-graph constellation ─────────────────────────────────────────
-    type FNode = { id: number; x: number; y: number; vx: number; vy: number;
-                   r: number; label: string; bright: boolean; pulse: number };
-    type FLink = { source: number; target: number; progress: number; speed: number; active: boolean; packets: { t: number; speed: number }[] };
+    // ── D3 colour scale ───────────────────────────────────────────────────
+    const colourScale = d3.scaleSequential()
+      .domain([0, 1])
+      .interpolator(d3.interpolateRgbBasis([
+        "#1a0a0a",   // deep maroon — flat floor
+        "#7f1d1d",   // dark red
+        "#ef4444",   // vivid red — mid height
+        "#f97316",   // orange — peaks
+        "#fbbf24",   // amber — very tallest spikes
+      ]));
 
-    const LABELS = [
-      "Revenue","Cash Flow","Assets","Equity","Payroll",
-      "Tax","VAT","EBITDA","Debt","Profit",
-      "Budget","Ledger","Forecast","Balance","Audit",
-      "Capital","Invoice","P&L","KPI","ROI",
-    ];
-
-    const nodes: FNode[] = Array.from({ length: 22 }, (_, id) => ({
-      id,
-      x: W * 0.1 + Math.random() * W * 0.8,
-      y: H * 0.08 + Math.random() * H * 0.84,
-      vx: (Math.random() - 0.5) * 0.4,
-      vy: (Math.random() - 0.5) * 0.4,
-      r: Math.random() > 0.8 ? 6 : Math.random() > 0.5 ? 4 : 3,
-      label: LABELS[id] ?? "",
-      bright: id < 5,
-      pulse: Math.random() * Math.PI * 2,
-    }));
-
-    const links: FLink[] = [];
-    nodes.forEach((n, i) => {
-      const count = n.bright ? 4 : 2;
-      const targets = nodes
-        .filter(m => m.id !== i)
-        .sort((a, b) =>
-          Math.hypot(a.x - n.x, a.y - n.y) - Math.hypot(b.x - n.x, b.y - n.y)
-        )
-        .slice(0, count);
-      targets.forEach(t => {
-        if (!links.find(l => (l.source === i && l.target === t.id) || (l.source === t.id && l.target === i))) {
-          links.push({
-            source: i, target: t.id,
-            progress: Math.random(),
-            speed: 0.001 + Math.random() * 0.002,
-            active: Math.random() > 0.3,
-            packets: Array.from({ length: Math.random() > 0.5 ? 2 : 1 }, () => ({
-              t: Math.random(),
-              speed: 0.0008 + Math.random() * 0.0015,
-            })),
-          });
-        }
-      });
-    });
-
-    // ── Mouse warp ────────────────────────────────────────────────────────
-    const onMouseMove = (e: MouseEvent) => {
+    // ── Mouse ─────────────────────────────────────────────────────────────
+    const onMove = (e: MouseEvent) => {
       mouseRef.current = { x: e.clientX, y: e.clientY };
     };
-    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mousemove", onMove);
 
-    // ── Main render loop ──────────────────────────────────────────────────
-    let t0 = performance.now();
+    // ── Per-cell random phase offset so each bar is independent ───────────
+    const phases = Array.from({ length: COLS * ROWS }, () => Math.random() * Math.PI * 2);
+    const seeds  = Array.from({ length: COLS * ROWS }, () => 0.6 + Math.random() * 0.4);
 
+    // ── Render ────────────────────────────────────────────────────────────
     const render = (now: number) => {
-      const t = now - t0;
+      const t = now * 0.0006;
       ctx.clearRect(0, 0, W, H);
 
-      // ── Update node physics ──────────────────────────────────────────
+      // Background gradient
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, "#080808");
+      bg.addColorStop(1, "#0d0505");
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, W, H);
+
       const { x: mx, y: my } = mouseRef.current;
-      nodes.forEach(n => {
-        // Gentle mouse attraction (subtle, not aggressive)
-        const dx = mx - n.x;
-        const dy = my - n.y;
-        const dist = Math.hypot(dx, dy);
-        const attract = dist > 0 ? Math.min(200 / (dist * dist), 0.012) : 0;
-        n.vx += dx * attract;
-        n.vy += dy * attract;
 
-        // Drift
-        n.vx += (Math.random() - 0.5) * 0.04;
-        n.vy += (Math.random() - 0.5) * 0.04;
+      // ── Build height field with D3 ─────────────────────────────────────
+      // Heights are driven by multiple overlapping sine waves (D3 trig)
+      type Cell = { col: number; row: number; h: number; screenZ: number };
+      const cells: Cell[] = [];
 
-        // Damping
-        n.vx *= 0.96;
-        n.vy *= 0.96;
+      for (let row = 0; row < ROWS; row++) {
+        for (let col = 0; col < COLS; col++) {
+          const idx = row * COLS + col;
+          const nc  = col / (COLS - 1);   // normalised 0-1
+          const nr  = row / (ROWS - 1);
 
-        n.x += n.vx;
-        n.y += n.vy;
+          // D3-driven height field: sum of offset sinusoids
+          let rawH =
+            Math.sin(nc * Math.PI * 3.2 + t * 0.9 + phases[idx] * 0.4) * 0.35 +
+            Math.sin(nr * Math.PI * 2.6 + t * 0.7 + phases[idx] * 0.6) * 0.30 +
+            Math.sin((nc + nr) * Math.PI * 2.1 + t * 1.1 + phases[idx]) * 0.20 +
+            seeds[idx] * 0.15;
 
-        // Bounce off edges
-        if (n.x < 40)    { n.x = 40;    n.vx = Math.abs(n.vx); }
-        if (n.x > W - 40){ n.x = W - 40; n.vx = -Math.abs(n.vx); }
-        if (n.y < 40)    { n.y = 40;    n.vy = Math.abs(n.vy); }
-        if (n.y > H - 40){ n.y = H - 40; n.vy = -Math.abs(n.vy); }
+          rawH = (rawH + 0.85) / 1.7;       // remap to 0-1
+          rawH = Math.max(0.02, Math.min(1, rawH));
 
-        n.pulse += 0.018;
-      });
+          // Mouse proximity boost — nearest columns flare up
+          const { sx, sy } = toScreen(col, row, 0);
+          const dist = Math.hypot(mx - sx, my - sy);
+          const boost = Math.max(0, 1 - dist / (ISO_SCALE * 4));
+          rawH = Math.min(1, rawH + boost * 0.55);
 
-      // ── Draw edges ───────────────────────────────────────────────────
-      links.forEach(link => {
-        const src = nodes[link.source];
-        const tgt = nodes[link.target];
+          // Isometric screen-Z for painter's sort
+          const screenZ = (col + row);
 
-        // Edge line
-        const edgeOpacity = 0.06 + 0.04 * Math.sin(t * 0.001 + link.source);
-        ctx.beginPath();
-        ctx.moveTo(src.x, src.y);
-        ctx.lineTo(tgt.x, tgt.y);
-        ctx.strokeStyle = `rgba(239,68,68,${edgeOpacity})`;
-        ctx.lineWidth = 0.8;
-        ctx.stroke();
-
-        // Animated packets along edge
-        if (link.active) {
-          link.packets.forEach(pkt => {
-            pkt.t += pkt.speed;
-            if (pkt.t > 1) pkt.t -= 1;
-
-            const px = src.x + (tgt.x - src.x) * pkt.t;
-            const py = src.y + (tgt.y - src.y) * pkt.t;
-
-            // Packet glow
-            const grad = ctx.createRadialGradient(px, py, 0, px, py, 7);
-            grad.addColorStop(0, "rgba(239,68,68,0.9)");
-            grad.addColorStop(0.4, "rgba(249,115,22,0.4)");
-            grad.addColorStop(1, "rgba(239,68,68,0)");
-            ctx.beginPath();
-            ctx.arc(px, py, 7, 0, Math.PI * 2);
-            ctx.fillStyle = grad;
-            ctx.fill();
-
-            // Packet core
-            ctx.beginPath();
-            ctx.arc(px, py, 1.8, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(255,200,200,0.95)";
-            ctx.fill();
-          });
-        }
-      });
-
-      // ── Draw nodes ───────────────────────────────────────────────────
-      nodes.forEach(n => {
-        const pulse = 0.5 + 0.5 * Math.sin(n.pulse);
-
-        // Outer glow ring
-        const glowR = n.r * (2.5 + pulse * 2);
-        const glowGrad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, glowR);
-        const glowAlpha = n.bright ? 0.25 + pulse * 0.15 : 0.10 + pulse * 0.06;
-        glowGrad.addColorStop(0, `rgba(239,68,68,${glowAlpha})`);
-        glowGrad.addColorStop(1, "rgba(239,68,68,0)");
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, glowR, 0, Math.PI * 2);
-        ctx.fillStyle = glowGrad;
-        ctx.fill();
-
-        // Node body
-        const nodeGrad = ctx.createRadialGradient(n.x - n.r * 0.3, n.y - n.r * 0.3, 0, n.x, n.y, n.r);
-        nodeGrad.addColorStop(0, n.bright ? "rgba(255,160,160,0.95)" : "rgba(239,68,68,0.7)");
-        nodeGrad.addColorStop(1, n.bright ? "rgba(239,68,68,0.8)" : "rgba(180,30,30,0.5)");
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-        ctx.fillStyle = nodeGrad;
-        ctx.fill();
-
-        // Label on bright nodes
-        if (n.bright) {
-          ctx.font = "10px Inter, sans-serif";
-          ctx.fillStyle = `rgba(255,255,255,${0.25 + pulse * 0.15})`;
-          ctx.textAlign = "center";
-          ctx.fillText(n.label, n.x, n.y - n.r - 6);
-        }
-      });
-
-      // ── Proximity shimmer between close nodes ─────────────────────────
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const dx = nodes[j].x - nodes[i].x;
-          const dy = nodes[j].y - nodes[i].y;
-          const d  = Math.hypot(dx, dy);
-          if (d < 160) {
-            ctx.beginPath();
-            ctx.moveTo(nodes[i].x, nodes[i].y);
-            ctx.lineTo(nodes[j].x, nodes[j].y);
-            ctx.strokeStyle = `rgba(239,68,68,${0.18 * (1 - d / 160)})`;
-            ctx.lineWidth = 0.5;
-            ctx.stroke();
-          }
+          cells.push({ col, row, h: rawH, screenZ });
         }
       }
 
-      // ── Scanline vignette (canvas) ────────────────────────────────────
-      const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.9);
-      vig.addColorStop(0, "rgba(8,8,8,0)");
-      vig.addColorStop(1, "rgba(8,8,8,0.75)");
+      // Painter's algorithm: back-to-front
+      cells.sort((a, b) => a.screenZ - b.screenZ);
+
+      // ── Draw each bar ──────────────────────────────────────────────────
+      const BAR_MAX_H = ISO_SCALE * 3.2;
+      const HW = ISO_SCALE * 0.64;   // half-width of a tile face
+
+      cells.forEach(({ col, row, h }) => {
+        const barH  = h * BAR_MAX_H;
+        const top   = toScreen(col, row, barH);
+        const tR    = toScreen(col + 1, row, barH);
+        const tC    = toScreen(col + 1, row + 1, barH);
+        const tL    = toScreen(col, row + 1, barH);
+        const botR  = toScreen(col + 1, row, 0);
+        const botC  = toScreen(col + 1, row + 1, 0);
+        const botL  = toScreen(col, row + 1, 0);
+
+        const colour = colourScale(h);
+        const alpha  = 0.55 + h * 0.45;
+
+        // ── Top face ──────────────────────────────────────────────────
+        ctx.beginPath();
+        ctx.moveTo(top.sx, top.sy);
+        ctx.lineTo(tR.sx, tR.sy);
+        ctx.lineTo(tC.sx, tC.sy);
+        ctx.lineTo(tL.sx, tL.sy);
+        ctx.closePath();
+        ctx.fillStyle = d3.color(colour)?.brighter(0.6)?.copy({ opacity: alpha }) + "" || colour;
+        ctx.fill();
+        // Top face edge glow for tall bars
+        if (h > 0.65) {
+          ctx.strokeStyle = `rgba(255,180,120,${(h - 0.65) * 0.8})`;
+          ctx.lineWidth = 0.6;
+          ctx.stroke();
+        }
+
+        // ── Right face ────────────────────────────────────────────────
+        ctx.beginPath();
+        ctx.moveTo(tR.sx, tR.sy);
+        ctx.lineTo(tC.sx, tC.sy);
+        ctx.lineTo(botC.sx, botC.sy);
+        ctx.lineTo(botR.sx, botR.sy);
+        ctx.closePath();
+        ctx.fillStyle = d3.color(colour)?.darker(0.8)?.copy({ opacity: alpha * 0.85 }) + "" || colour;
+        ctx.fill();
+
+        // ── Left face ─────────────────────────────────────────────────
+        ctx.beginPath();
+        ctx.moveTo(top.sx, top.sy);
+        ctx.lineTo(tL.sx, tL.sy);
+        ctx.lineTo(botL.sx, botL.sy);
+        ctx.lineTo(toScreen(col, row, 0).sx, toScreen(col, row, 0).sy);
+        ctx.closePath();
+        ctx.fillStyle = d3.color(colour)?.darker(1.4)?.copy({ opacity: alpha * 0.7 }) + "" || colour;
+        ctx.fill();
+      });
+
+      // ── Radial vignette ───────────────────────────────────────────────
+      const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.1, W / 2, H / 2, H * 0.95);
+      vig.addColorStop(0,   "rgba(8,8,8,0)");
+      vig.addColorStop(0.5, "rgba(8,8,8,0.1)");
+      vig.addColorStop(1,   "rgba(8,8,8,0.92)");
       ctx.fillStyle = vig;
       ctx.fillRect(0, 0, W, H);
 
-      // ── Animate SVG waves ─────────────────────────────────────────────
-      wavePaths.forEach((p, i) => p.attr("d", buildWavePath(t, i)));
+      // Top fade so hero text is readable
+      const topFade = ctx.createLinearGradient(0, 0, 0, H * 0.55);
+      topFade.addColorStop(0,   "rgba(8,8,8,0.85)");
+      topFade.addColorStop(0.4, "rgba(8,8,8,0.3)");
+      topFade.addColorStop(1,   "rgba(8,8,8,0)");
+      ctx.fillStyle = topFade;
+      ctx.fillRect(0, 0, W, H * 0.55);
 
       rafRef.current = requestAnimationFrame(render);
     };
 
     rafRef.current = requestAnimationFrame(render);
 
+    const onResize = () => {
+      W = window.innerWidth;
+      H = window.innerHeight;
+      canvas.width  = W;
+      canvas.height = H;
+    };
+    window.addEventListener("resize", onResize);
+
     return () => {
       cancelAnimationFrame(rafRef.current);
-      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("resize", onResize);
     };
   }, []);
 
   return (
-    <div className="absolute inset-0 overflow-hidden">
-      {/* Wave SVG — behind canvas */}
-      <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none" />
-      {/* Network canvas — on top */}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
-    </div>
+    <canvas
+      ref={canvasRef}
+      className="absolute inset-0 w-full h-full pointer-events-none"
+    />
   );
 };
 
