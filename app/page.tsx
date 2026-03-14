@@ -31,99 +31,308 @@ import {
 } from "lucide-react";
 import ClickSpark from "@/components/ui/ClickSpark";
 
-/* ─────────────────────────── D3 AURORA BACKGROUND ─────────────────────── */
-const AuroraBackground = () => {
-  const svgRef = useRef<SVGSVGElement>(null);
+/* ══════════════════════════════════════════════════════════════════════════
+   HERO BACKGROUND — Living Financial Neural Network
+   Layers (back → front):
+   1. Morphing wave bands (CSS + D3 paths)
+   2. Force-graph constellation of financial nodes + glowing edges
+   3. Animated "money packets" traveling along edges
+   4. Mouse-reactive gravitational warp field
+   5. Scanline vignette overlay
+   ══════════════════════════════════════════════════════════════════════════ */
+const HeroBackground = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const svgRef   = useRef<SVGSVGElement>(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
+  const rafRef   = useRef<number>(0);
 
   useEffect(() => {
-    if (!svgRef.current) return;
-    const svg = d3.select(svgRef.current);
-    svg.selectAll("*").remove();
+    const canvas = canvasRef.current;
+    const svgEl  = svgRef.current;
+    if (!canvas || !svgEl) return;
 
     const W = window.innerWidth;
     const H = window.innerHeight;
-    svg.attr("width", W).attr("height", H).attr("viewBox", `0 0 ${W} ${H}`);
+    canvas.width  = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d")!;
+
+    // ── SVG layer (waves) ─────────────────────────────────────────────────
+    const svg = d3.select(svgEl)
+      .attr("width", W).attr("height", H)
+      .attr("viewBox", `0 0 ${W} ${H}`);
+    svg.selectAll("*").remove();
 
     const defs = svg.append("defs");
 
-    // Radial gradient 1
-    const g1 = defs.append("radialGradient").attr("id", "aurora1");
-    g1.append("stop").attr("offset", "0%").attr("stop-color", "#ef4444").attr("stop-opacity", 0.4);
-    g1.append("stop").attr("offset", "100%").attr("stop-color", "#ef4444").attr("stop-opacity", 0);
+    // Glow filter
+    const glowFilter = defs.append("filter").attr("id", "glow").attr("x", "-50%").attr("y", "-50%").attr("width", "200%").attr("height", "200%");
+    glowFilter.append("feGaussianBlur").attr("stdDeviation", "6").attr("result", "blur");
+    const feMerge = glowFilter.append("feMerge");
+    feMerge.append("feMergeNode").attr("in", "blur");
+    feMerge.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Radial gradient 2
-    const g2 = defs.append("radialGradient").attr("id", "aurora2");
-    g2.append("stop").attr("offset", "0%").attr("stop-color", "#f97316").attr("stop-opacity", 0.25);
-    g2.append("stop").attr("offset", "100%").attr("stop-color", "#f97316").attr("stop-opacity", 0);
+    // Subtle glow filter for waves
+    const waveGlow = defs.append("filter").attr("id", "wave-glow");
+    waveGlow.append("feGaussianBlur").attr("stdDeviation", "18").attr("result", "blur");
+    const wm = waveGlow.append("feMerge");
+    wm.append("feMergeNode").attr("in", "blur");
+    wm.append("feMergeNode").attr("in", "SourceGraphic");
 
-    // Radial gradient 3
-    const g3 = defs.append("radialGradient").attr("id", "aurora3");
-    g3.append("stop").attr("offset", "0%").attr("stop-color", "#dc2626").attr("stop-opacity", 0.2);
-    g3.append("stop").attr("offset", "100%").attr("stop-color", "#dc2626").attr("stop-opacity", 0);
+    // ── Morphing wave bands ───────────────────────────────────────────────
+    const WAVE_COUNT = 5;
+    const wavePaths: d3.Selection<SVGPathElement, unknown, null, undefined>[] = [];
+    const wavePhases = Array.from({ length: WAVE_COUNT }, (_, i) => i * (Math.PI * 2) / WAVE_COUNT);
+    const waveColors = [
+      "rgba(239,68,68,0.06)",
+      "rgba(220,38,38,0.05)",
+      "rgba(249,115,22,0.045)",
+      "rgba(239,68,68,0.04)",
+      "rgba(185,28,28,0.035)",
+    ];
+    const waveAmps   = [80, 60, 70, 50, 90];
+    const waveSpeeds = [0.00035, 0.00028, 0.00042, 0.00025, 0.00038];
+    const waveYBase  = [H * 0.30, H * 0.45, H * 0.55, H * 0.65, H * 0.75];
 
-    // Grid lines
-    const gridG = svg.append("g").attr("opacity", 0.04);
-    for (let x = 0; x < W; x += 80) {
-      gridG.append("line").attr("x1", x).attr("y1", 0).attr("x2", x).attr("y2", H)
-        .attr("stroke", "#ffffff").attr("stroke-width", 0.5);
+    for (let i = 0; i < WAVE_COUNT; i++) {
+      wavePaths.push(
+        svg.append("path")
+          .attr("fill", waveColors[i])
+          .attr("filter", "url(#wave-glow)")
+      );
     }
-    for (let y = 0; y < H; y += 80) {
-      gridG.append("line").attr("x1", 0).attr("y1", y).attr("x2", W).attr("y2", y)
-        .attr("stroke", "#ffffff").attr("stroke-width", 0.5);
-    }
 
-    // Glow orbs
-    const orb1 = svg.append("ellipse")
-      .attr("cx", W * 0.3).attr("cy", H * 0.2).attr("rx", 350).attr("ry", 250)
-      .attr("fill", "url(#aurora1)");
+    const buildWavePath = (t: number, i: number) => {
+      const pts: [number, number][] = [];
+      const segs = 80;
+      for (let s = 0; s <= segs; s++) {
+        const fx = (s / segs) * W;
+        const fy =
+          waveYBase[i] +
+          Math.sin(fx * 0.006 + t * waveSpeeds[i] * 1000 + wavePhases[i]) * waveAmps[i] +
+          Math.sin(fx * 0.003 + t * waveSpeeds[i] * 700  + wavePhases[i] * 1.3) * (waveAmps[i] * 0.4) +
+          Math.sin(fx * 0.001 + t * waveSpeeds[i] * 400  + wavePhases[i] * 0.7) * (waveAmps[i] * 0.6);
+        pts.push([fx, fy]);
+      }
+      const line = d3.line<[number, number]>().x(d => d[0]).y(d => d[1]).curve(d3.curveCatmullRom);
+      const top = line(pts) || "";
+      return top + ` L${W},${H} L0,${H} Z`;
+    };
 
-    const orb2 = svg.append("ellipse")
-      .attr("cx", W * 0.8).attr("cy", H * 0.5).attr("rx", 300).attr("ry", 200)
-      .attr("fill", "url(#aurora2)");
+    // ── Force-graph constellation ─────────────────────────────────────────
+    type FNode = { id: number; x: number; y: number; vx: number; vy: number;
+                   r: number; label: string; bright: boolean; pulse: number };
+    type FLink = { source: number; target: number; progress: number; speed: number; active: boolean; packets: { t: number; speed: number }[] };
 
-    const orb3 = svg.append("ellipse")
-      .attr("cx", W * 0.5).attr("cy", H * 0.8).attr("rx", 280).attr("ry", 180)
-      .attr("fill", "url(#aurora3)");
+    const LABELS = [
+      "Revenue","Cash Flow","Assets","Equity","Payroll",
+      "Tax","VAT","EBITDA","Debt","Profit",
+      "Budget","Ledger","Forecast","Balance","Audit",
+      "Capital","Invoice","P&L","KPI","ROI",
+    ];
 
-    // Floating particles
-    const particles = Array.from({ length: 60 }, (_, i) => ({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      r: Math.random() * 1.5 + 0.5,
-      speed: Math.random() * 0.3 + 0.1,
-      opacity: Math.random() * 0.4 + 0.1,
+    const nodes: FNode[] = Array.from({ length: 22 }, (_, id) => ({
+      id,
+      x: W * 0.1 + Math.random() * W * 0.8,
+      y: H * 0.08 + Math.random() * H * 0.84,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+      r: Math.random() > 0.8 ? 6 : Math.random() > 0.5 ? 4 : 3,
+      label: LABELS[id] ?? "",
+      bright: id < 5,
+      pulse: Math.random() * Math.PI * 2,
     }));
 
-    const particleG = svg.append("g");
-    const dots = particleG
-      .selectAll("circle")
-      .data(particles)
-      .join("circle")
-      .attr("cx", d => d.x)
-      .attr("cy", d => d.y)
-      .attr("r", d => d.r)
-      .attr("fill", "#ef4444")
-      .attr("opacity", d => d.opacity);
+    const links: FLink[] = [];
+    nodes.forEach((n, i) => {
+      const count = n.bright ? 4 : 2;
+      const targets = nodes
+        .filter(m => m.id !== i)
+        .sort((a, b) =>
+          Math.hypot(a.x - n.x, a.y - n.y) - Math.hypot(b.x - n.x, b.y - n.y)
+        )
+        .slice(0, count);
+      targets.forEach(t => {
+        if (!links.find(l => (l.source === i && l.target === t.id) || (l.source === t.id && l.target === i))) {
+          links.push({
+            source: i, target: t.id,
+            progress: Math.random(),
+            speed: 0.001 + Math.random() * 0.002,
+            active: Math.random() > 0.3,
+            packets: Array.from({ length: Math.random() > 0.5 ? 2 : 1 }, () => ({
+              t: Math.random(),
+              speed: 0.0008 + Math.random() * 0.0015,
+            })),
+          });
+        }
+      });
+    });
 
-    // Animate orbs
-    const animateOrbs = () => {
-      orb1.transition().duration(4000).ease(d3.easeSinInOut)
-        .attr("cx", W * 0.3 + Math.sin(Date.now() / 3000) * 60)
-        .attr("cy", H * 0.2 + Math.cos(Date.now() / 4000) * 40)
-        .on("end", animateOrbs);
+    // ── Mouse warp ────────────────────────────────────────────────────────
+    const onMouseMove = (e: MouseEvent) => {
+      mouseRef.current = { x: e.clientX, y: e.clientY };
     };
-    animateOrbs();
+    window.addEventListener("mousemove", onMouseMove);
 
-    // Tick particles
-    const tick = () => {
-      particles.forEach(p => { p.y -= p.speed; if (p.y < -10) p.y = H + 10; });
-      dots.attr("cy", d => d.y);
-      requestAnimationFrame(tick);
+    // ── Main render loop ──────────────────────────────────────────────────
+    let t0 = performance.now();
+
+    const render = (now: number) => {
+      const t = now - t0;
+      ctx.clearRect(0, 0, W, H);
+
+      // ── Update node physics ──────────────────────────────────────────
+      const { x: mx, y: my } = mouseRef.current;
+      nodes.forEach(n => {
+        // Gentle mouse attraction (subtle, not aggressive)
+        const dx = mx - n.x;
+        const dy = my - n.y;
+        const dist = Math.hypot(dx, dy);
+        const attract = dist > 0 ? Math.min(200 / (dist * dist), 0.012) : 0;
+        n.vx += dx * attract;
+        n.vy += dy * attract;
+
+        // Drift
+        n.vx += (Math.random() - 0.5) * 0.04;
+        n.vy += (Math.random() - 0.5) * 0.04;
+
+        // Damping
+        n.vx *= 0.96;
+        n.vy *= 0.96;
+
+        n.x += n.vx;
+        n.y += n.vy;
+
+        // Bounce off edges
+        if (n.x < 40)    { n.x = 40;    n.vx = Math.abs(n.vx); }
+        if (n.x > W - 40){ n.x = W - 40; n.vx = -Math.abs(n.vx); }
+        if (n.y < 40)    { n.y = 40;    n.vy = Math.abs(n.vy); }
+        if (n.y > H - 40){ n.y = H - 40; n.vy = -Math.abs(n.vy); }
+
+        n.pulse += 0.018;
+      });
+
+      // ── Draw edges ───────────────────────────────────────────────────
+      links.forEach(link => {
+        const src = nodes[link.source];
+        const tgt = nodes[link.target];
+
+        // Edge line
+        const edgeOpacity = 0.06 + 0.04 * Math.sin(t * 0.001 + link.source);
+        ctx.beginPath();
+        ctx.moveTo(src.x, src.y);
+        ctx.lineTo(tgt.x, tgt.y);
+        ctx.strokeStyle = `rgba(239,68,68,${edgeOpacity})`;
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+
+        // Animated packets along edge
+        if (link.active) {
+          link.packets.forEach(pkt => {
+            pkt.t += pkt.speed;
+            if (pkt.t > 1) pkt.t -= 1;
+
+            const px = src.x + (tgt.x - src.x) * pkt.t;
+            const py = src.y + (tgt.y - src.y) * pkt.t;
+
+            // Packet glow
+            const grad = ctx.createRadialGradient(px, py, 0, px, py, 7);
+            grad.addColorStop(0, "rgba(239,68,68,0.9)");
+            grad.addColorStop(0.4, "rgba(249,115,22,0.4)");
+            grad.addColorStop(1, "rgba(239,68,68,0)");
+            ctx.beginPath();
+            ctx.arc(px, py, 7, 0, Math.PI * 2);
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // Packet core
+            ctx.beginPath();
+            ctx.arc(px, py, 1.8, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(255,200,200,0.95)";
+            ctx.fill();
+          });
+        }
+      });
+
+      // ── Draw nodes ───────────────────────────────────────────────────
+      nodes.forEach(n => {
+        const pulse = 0.5 + 0.5 * Math.sin(n.pulse);
+
+        // Outer glow ring
+        const glowR = n.r * (2.5 + pulse * 2);
+        const glowGrad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, glowR);
+        const glowAlpha = n.bright ? 0.25 + pulse * 0.15 : 0.10 + pulse * 0.06;
+        glowGrad.addColorStop(0, `rgba(239,68,68,${glowAlpha})`);
+        glowGrad.addColorStop(1, "rgba(239,68,68,0)");
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, glowR, 0, Math.PI * 2);
+        ctx.fillStyle = glowGrad;
+        ctx.fill();
+
+        // Node body
+        const nodeGrad = ctx.createRadialGradient(n.x - n.r * 0.3, n.y - n.r * 0.3, 0, n.x, n.y, n.r);
+        nodeGrad.addColorStop(0, n.bright ? "rgba(255,160,160,0.95)" : "rgba(239,68,68,0.7)");
+        nodeGrad.addColorStop(1, n.bright ? "rgba(239,68,68,0.8)" : "rgba(180,30,30,0.5)");
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+        ctx.fillStyle = nodeGrad;
+        ctx.fill();
+
+        // Label on bright nodes
+        if (n.bright) {
+          ctx.font = "10px Inter, sans-serif";
+          ctx.fillStyle = `rgba(255,255,255,${0.25 + pulse * 0.15})`;
+          ctx.textAlign = "center";
+          ctx.fillText(n.label, n.x, n.y - n.r - 6);
+        }
+      });
+
+      // ── Proximity shimmer between close nodes ─────────────────────────
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const dx = nodes[j].x - nodes[i].x;
+          const dy = nodes[j].y - nodes[i].y;
+          const d  = Math.hypot(dx, dy);
+          if (d < 160) {
+            ctx.beginPath();
+            ctx.moveTo(nodes[i].x, nodes[i].y);
+            ctx.lineTo(nodes[j].x, nodes[j].y);
+            ctx.strokeStyle = `rgba(239,68,68,${0.18 * (1 - d / 160)})`;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // ── Scanline vignette (canvas) ────────────────────────────────────
+      const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.9);
+      vig.addColorStop(0, "rgba(8,8,8,0)");
+      vig.addColorStop(1, "rgba(8,8,8,0.75)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, W, H);
+
+      // ── Animate SVG waves ─────────────────────────────────────────────
+      wavePaths.forEach((p, i) => p.attr("d", buildWavePath(t, i)));
+
+      rafRef.current = requestAnimationFrame(render);
     };
-    tick();
+
+    rafRef.current = requestAnimationFrame(render);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+      window.removeEventListener("mousemove", onMouseMove);
+    };
   }, []);
 
-  return <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none" />;
+  return (
+    <div className="absolute inset-0 overflow-hidden">
+      {/* Wave SVG — behind canvas */}
+      <svg ref={svgRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+      {/* Network canvas — on top */}
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+    </div>
+  );
 };
 
 /* ─────────────────────────── D3 LINE CHART ────────────────────────────── */
@@ -416,14 +625,46 @@ export default function Home() {
 
         {/* ── HERO ─────────────────────────────────────────────────────── */}
         <section id="home" className="relative min-h-screen flex flex-col items-center justify-center overflow-hidden">
-          {/* Aurora BG */}
+          {/* Hero Background */}
           <div className="absolute inset-0">
-            <AuroraBackground />
+            <HeroBackground />
           </div>
+
+          {/* Top beacon beam */}
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-40 bg-gradient-to-b from-red-500/60 to-transparent" />
+          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-px bg-gradient-to-r from-transparent via-red-500/40 to-transparent" />
 
           {/* Vignette */}
           <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_0%,transparent_40%,#080808_100%)]" />
-          <div className="absolute bottom-0 left-0 right-0 h-40 bg-gradient-to-t from-[#080808] to-transparent" />
+          <div className="absolute bottom-0 left-0 right-0 h-48 bg-gradient-to-t from-[#080808] to-transparent" />
+
+          {/* Live ticker strip at bottom of hero */}
+          <div className="absolute bottom-12 left-0 right-0 z-20 overflow-hidden pointer-events-none">
+            <div className="flex gap-10 animate-[ticker_30s_linear_infinite] whitespace-nowrap w-max">
+              {[
+                { label: "Revenue", value: "+12.4%", up: true },
+                { label: "Tax Filing", value: "On time", up: true },
+                { label: "Payroll", value: "Automated", up: true },
+                { label: "Cash Flow", value: "+8.1%", up: true },
+                { label: "VAT Return", value: "Submitted", up: true },
+                { label: "EBITDA", value: "+21.3%", up: true },
+                { label: "Audit Risk", value: "Low", up: true },
+                { label: "Clients", value: "200+", up: true },
+                { label: "Revenue", value: "+12.4%", up: true },
+                { label: "Tax Filing", value: "On time", up: true },
+                { label: "Payroll", value: "Automated", up: true },
+                { label: "Cash Flow", value: "+8.1%", up: true },
+                { label: "VAT Return", value: "Submitted", up: true },
+                { label: "EBITDA", value: "+21.3%", up: true },
+              ].map((item, i) => (
+                <span key={i} className="flex items-center gap-2 text-xs font-mono">
+                  <span className="text-gray-600">{item.label}</span>
+                  <span className="text-green-400">{item.value}</span>
+                  <span className="text-gray-700">·</span>
+                </span>
+              ))}
+            </div>
+          </div>
 
           <motion.div
             style={{ y: heroY, opacity: heroOpacity }}
